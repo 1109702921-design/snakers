@@ -32,206 +32,200 @@
 
     <button id="start-btn" onclick="startGame()">Tap to Start</button>
 
-    <script>
-        const videoElement = document.getElementById('input_video');
-        const canvasElement = document.getElementById('output_canvas');
-        const canvasCtx = canvasElement.getContext('2d');
-        const scoreBoard = document.getElementById('score-board');
-        const statusText = document.getElementById('status-text');
-        const startBtn = document.getElementById('start-btn');
+   <script>
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const scoreBoard = document.getElementById('score-board');
+    const statusText = document.getElementById('status-text');
+    const startBtn = document.getElementById('start-btn');
 
-        let isPlaying = false;
-        let score = 0;
-        let width = window.innerWidth;
-        let height = window.innerHeight;
-        
-        // 游戏参数
-        let snakeBody = [];
-        const initialLength = 15;
-        const snakeRadius = 15;
-        const speed = 5; // 移动速度
-        let food = {x: 0, y: 0, r: 15, color: '#ffcc00'};
-        let targetPos = {x: width/2, y: height/2};
-        let particles = [];
+    let isPlaying = false;
+    let score = 0;
+    let width = window.innerWidth;
+    let height = window.innerHeight;
+    
+    // 游戏参数
+    let snakeBody = [];
+    const initialLength = 15;
+    const snakeRadius = 15;
+    const speed = 5; 
+    let food = {x: 0, y: 0, r: 15, color: '#ffcc00'};
+    let targetPos = {x: width/2, y: height/2};
+    let particles = [];
+    
+    // 强制设置 Canvas 大小与屏幕一致
+    function resize() {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvasElement.width = width;
+        canvasElement.height = height;
+    }
+    window.addEventListener('resize', resize);
+    resize();
 
-        // 初始化 Canvas 大小
-        function resize() {
-            width = window.innerWidth;
-            height = window.innerHeight;
-            canvasElement.width = width;
-            canvasElement.height = height;
+    // --- MediaPipe 设置 ---
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+    
+    hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 0, // 【关键修改】手机端改成 0 (Lite模型)，速度更快，不容易卡顿
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+    });
+
+    // 【核心修复】将游戏渲染逻辑完全放入 MediaPipe 的回调中
+    // 确保顺序永远是：1.清空 -> 2.画视频背景 -> 3.画蛇 -> 4.显示
+    hands.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+        onFrame: async () => {
+            await hands.send({image: videoElement});
+        },
+        width: 640,  // 降低分辨率以提升手机性能
+        height: 480,
+        facingMode: 'user'
+    });
+
+    function startGame() {
+        startBtn.style.display = 'none';
+        statusText.innerText = "Initializing...";
+        camera.start()
+            .then(() => {
+                resetGame();
+                isPlaying = true;
+                statusText.innerText = "Show Hand to Play";
+                // 注意：这里不再单独启动 loop()，完全依赖 camera 驱动
+            })
+            .catch(err => {
+                alert("Camera Error: " + err);
+            });
+    }
+
+    function resetGame() {
+        snakeBody = [];
+        // 初始化蛇身
+        for(let i=0; i<initialLength; i++) {
+            snakeBody.push({x: width/2, y: height/2 + i*5});
         }
-        window.addEventListener('resize', resize);
-        resize();
+        score = 0;
+        spawnFood();
+    }
 
-        // --- MediaPipe 设置 ---
-        const hands = new Hands({locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-        }});
+    function spawnFood() {
+        food.x = Math.random() * (width - 60) + 30;
+        food.y = Math.random() * (height - 60) + 30;
+    }
+
+    // 这是一帧内所有的逻辑，保证图层顺序正确
+    function onResults(results) {
+        // 1. 绘制背景 (摄像头画面)
+        canvasCtx.save();
+        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+        canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
         
-        hands.setOptions({
-            maxNumHands: 1,
-            modelComplexity: 1,
-            minDetectionConfidence: 0.7,
-            minTrackingConfidence: 0.7
-        });
-
-        hands.onResults(onResults);
-
-        // --- 摄像头设置 ---
-        const camera = new Camera(videoElement, {
-            onFrame: async () => {
-                await hands.send({image: videoElement});
-            },
-            width: 1280,
-            height: 720,
-            facingMode: 'user' // 使用前置摄像头
-        });
-
-        function startGame() {
-            startBtn.style.display = 'none';
-            statusText.innerText = "Initializing Camera...";
-            camera.start()
-                .then(() => {
-                    resetGame();
-                    isPlaying = true;
-                    statusText.innerText = "Show Hand to Play";
-                    loop();
-                })
-                .catch(err => {
-                    alert("Camera access denied or error: " + err);
-                });
+        // 2. 更新手势目标点
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            const landmarks = results.multiHandLandmarks[0];
+            // 获取食指指尖 (索引 8)
+            // 镜像处理：手机前置摄像头是镜像的
+            const x = (1 - landmarks[8].x) * width; 
+            const y = landmarks[8].y * height;
+            targetPos.x = x;
+            targetPos.y = y;
+            
+            // 画个小圆圈提示手在哪里
+            drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 1});
         }
 
-        // --- 游戏逻辑 ---
+        // 3. 如果游戏开始了，更新并绘制游戏元素
+        if (isPlaying) {
+            updateGameLogic(); // 算位置
+            drawGameElements(); // 画出来
+        }
+        
+        canvasCtx.restore();
+    }
 
-        function resetGame() {
-            snakeBody = [];
-            for(let i=0; i<initialLength; i++) {
-                snakeBody.push({x: width/2, y: height/2});
-            }
-            score = 0;
+    function updateGameLogic() {
+        // 移动蛇头逻辑
+        let head = snakeBody[0];
+        // 如果没有检测到手，蛇就慢慢停下或者保持惯性，这里简单处理为向目标点移动
+        let dx = targetPos.x - head.x;
+        let dy = targetPos.y - head.y;
+        let dist = Math.sqrt(dx*dx + dy*dy);
+
+        let newHead = {x: head.x, y: head.y};
+
+        if (dist > speed) {
+            newHead.x += (dx / dist) * speed;
+            newHead.y += (dy / dist) * speed;
+        } else {
+            newHead.x += dx * 0.2;
+            newHead.y += dy * 0.2;
+        }
+
+        snakeBody.unshift(newHead);
+
+        // 吃食物
+        let distFood = Math.sqrt((newHead.x - food.x)**2 + (newHead.y - food.y)**2);
+        if (distFood < (snakeRadius + food.r)) {
+            score += 10;
+            scoreBoard.innerText = "Score: " + score;
             spawnFood();
+            // 粒子特效
+            for(let k=0; k<8; k++) {
+                particles.push({
+                    x: food.x, y: food.y,
+                    vx: (Math.random()-0.5)*15, vy: (Math.random()-0.5)*15,
+                    life: 20, color: `hsl(${Math.random()*360}, 100%, 50%)`
+                });
+            }
+        } else {
+            snakeBody.pop();
         }
 
-        function spawnFood() {
-            food.x = Math.random() * (width - 40) + 20;
-            food.y = Math.random() * (height - 40) + 20;
+        // 粒子更新
+        for (let i = particles.length - 1; i >= 0; i--) {
+            let p = particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.life--;
+            if(p.life <= 0) particles.splice(i, 1);
         }
+    }
 
-        function onResults(results) {
-            // 绘制背景 (摄像头画面)
-            canvasCtx.save();
-            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-            
-            // 手势识别
-            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                const landmarks = results.multiHandLandmarks[0];
-                // 获取食指指尖 (索引 8)
-                // 注意：Canvas是镜像的，所以 X 坐标逻辑要反一下
-                const x = (1 - landmarks[8].x) * width; 
-                const y = landmarks[8].y * height;
-                
-                targetPos.x = x;
-                targetPos.y = y;
+    function drawGameElements() {
+        // 画食物
+        canvasCtx.beginPath();
+        canvasCtx.arc(food.x, food.y, food.r, 0, 2 * Math.PI);
+        canvasCtx.fillStyle = food.color;
+        canvasCtx.fill();
+        canvasCtx.strokeStyle = "white";
+        canvasCtx.stroke();
 
-                // 画手部骨架 (可选)
-                drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 2});
-            }
-            canvasCtx.restore();
-        }
-
-        function updateGame() {
-            if (!isPlaying) return;
-
-            // 移动蛇头逻辑 (向量)
-            let head = snakeBody[0];
-            let dx = targetPos.x - head.x;
-            let dy = targetPos.y - head.y;
-            let dist = Math.sqrt(dx*dx + dy*dy);
-
-            let newHead = {x: head.x, y: head.y};
-
-            if (dist > speed) {
-                newHead.x += (dx / dist) * speed;
-                newHead.y += (dy / dist) * speed;
-            } else {
-                newHead.x += dx * 0.5; // 靠近时减速吸附
-                newHead.y += dy * 0.5;
-            }
-
-            snakeBody.unshift(newHead);
-
-            // 吃食物判定
-            let distFood = Math.sqrt((newHead.x - food.x)**2 + (newHead.y - food.y)**2);
-            if (distFood < (snakeRadius + food.r)) {
-                score += 10;
-                scoreBoard.innerText = "Score: " + score;
-                spawnFood();
-                // 简单的粒子特效
-                for(let k=0; k<5; k++) {
-                    particles.push({
-                        x: food.x, y: food.y,
-                        vx: (Math.random()-0.5)*10, vy: (Math.random()-0.5)*10,
-                        life: 20, color: `hsl(${Math.random()*360}, 100%, 50%)`
-                    });
-                }
-            } else {
-                snakeBody.pop();
-            }
-
-            // 粒子更新
-            for (let i = particles.length - 1; i >= 0; i--) {
-                let p = particles[i];
-                p.x += p.vx;
-                p.y += p.vy;
-                p.life--;
-                if(p.life <= 0) particles.splice(i, 1);
-            }
-        }
-
-        function drawGame() {
-            // 画食物
+        // 画蛇
+        for (let i = snakeBody.length - 1; i >= 0; i--) {
+            let segment = snakeBody[i];
             canvasCtx.beginPath();
-            canvasCtx.arc(food.x, food.y, food.r, 0, 2 * Math.PI);
-            canvasCtx.fillStyle = food.color;
-            canvasCtx.fill();
-            canvasCtx.lineWidth = 2;
-            canvasCtx.strokeStyle = "white";
-            canvasCtx.stroke();
-
-            // 画蛇
-            for (let i = snakeBody.length - 1; i >= 0; i--) {
-                let segment = snakeBody[i];
-                canvasCtx.beginPath();
-                canvasCtx.arc(segment.x, segment.y, snakeRadius - (i>10?5:0), 0, 2 * Math.PI);
-                // 彩虹色
-                canvasCtx.fillStyle = `hsl(${(score + i*5)%360}, 70%, 50%)`;
-                canvasCtx.fill();
-            }
-
-            // 画粒子
-            for (let p of particles) {
-                canvasCtx.beginPath();
-                canvasCtx.arc(p.x, p.y, 5, 0, 2 * Math.PI);
-                canvasCtx.fillStyle = p.color;
-                canvasCtx.fill();
-            }
-            
-            // 画目标点提示
-            canvasCtx.beginPath();
-            canvasCtx.arc(targetPos.x, targetPos.y, 8, 0, 2 * Math.PI);
-            canvasCtx.fillStyle = "rgba(255, 255, 255, 0.5)";
+            // 简单的渐变色
+            canvasCtx.fillStyle = `hsl(${(score + i*5)%360}, 70%, 50%)`;
+            canvasCtx.arc(segment.x, segment.y, snakeRadius, 0, 2 * Math.PI);
             canvasCtx.fill();
         }
 
-        function loop() {
-            updateGame();
-            drawGame();
-            requestAnimationFrame(loop);
+        // 画粒子
+        for (let p of particles) {
+            canvasCtx.beginPath();
+            canvasCtx.fillStyle = p.color;
+            canvasCtx.arc(p.x, p.y, 4, 0, 2 * Math.PI);
+            canvasCtx.fill();
         }
-    </script>
+    }
+</script>
 </body>
 </html>
+
 
