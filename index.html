@@ -131,7 +131,7 @@
             const landmarks = results.multiHandLandmarks[0];
             // 获取食指指尖 (索引 8)
             // 镜像处理：手机前置摄像头是镜像的
-            const x = (1 - landmarks[8].x) * width; 
+            const x = landmarks[8].x * width;
             const y = landmarks[8].y * height;
             targetPos.x = x;
             targetPos.y = y;
@@ -227,5 +227,6 @@
 </script>
 </body>
 </html>
+
 
 
